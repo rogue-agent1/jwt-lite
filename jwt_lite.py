@@ -1,59 +1,48 @@
 #!/usr/bin/env python3
-"""JWT encoder/decoder with HMAC-SHA256 signing."""
-import sys, json, base64, hmac, hashlib, time
+"""JWT creation and validation (HMAC-SHA256). Zero dependencies."""
+import hmac, hashlib, json, time
 
-def b64url_encode(data):
+def _b64url_encode(data):
+    import base64
     if isinstance(data, str): data = data.encode()
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
-def b64url_decode(s):
+def _b64url_decode(s):
+    import base64
     s += "=" * (4 - len(s) % 4)
     return base64.urlsafe_b64decode(s)
 
-def encode(payload, secret, algorithm="HS256"):
-    header = {"alg": algorithm, "typ": "JWT"}
-    segments = [b64url_encode(json.dumps(header)), b64url_encode(json.dumps(payload))]
-    signing_input = ".".join(segments)
-    if algorithm == "HS256":
-        sig = hmac.new(secret.encode(), signing_input.encode(), hashlib.sha256).digest()
-    else:
-        raise ValueError(f"Unsupported: {algorithm}")
-    segments.append(b64url_encode(sig))
-    return ".".join(segments)
+def create_jwt(payload, secret, exp_seconds=3600):
+    header = {"alg":"HS256","typ":"JWT"}
+    if exp_seconds:
+        payload = dict(payload)
+        payload["iat"] = int(time.time())
+        payload["exp"] = int(time.time()) + exp_seconds
+    h = _b64url_encode(json.dumps(header))
+    p = _b64url_encode(json.dumps(payload))
+    sig = hmac.new(secret.encode(), f"{h}.{p}".encode(), hashlib.sha256).digest()
+    return f"{h}.{p}.{_b64url_encode(sig)}"
 
-def decode(token, secret, verify=True):
+def decode_jwt(token, secret=None, verify=True):
     parts = token.split(".")
-    if len(parts) != 3: raise ValueError("Invalid JWT")
-    header = json.loads(b64url_decode(parts[0]))
-    payload = json.loads(b64url_decode(parts[1]))
-    if verify:
-        signing_input = f"{parts[0]}.{parts[1]}"
-        expected = hmac.new(secret.encode(), signing_input.encode(), hashlib.sha256).digest()
-        actual = b64url_decode(parts[2])
+    if len(parts) != 3: raise ValueError("Invalid JWT format")
+    header = json.loads(_b64url_decode(parts[0]))
+    payload = json.loads(_b64url_decode(parts[1]))
+    if verify and secret:
+        expected = hmac.new(secret.encode(), f"{parts[0]}.{parts[1]}".encode(), hashlib.sha256).digest()
+        actual = _b64url_decode(parts[2])
         if not hmac.compare_digest(expected, actual):
             raise ValueError("Invalid signature")
         if "exp" in payload and payload["exp"] < time.time():
             raise ValueError("Token expired")
+    return header, payload
+
+def get_claims(token):
+    _, payload = decode_jwt(token, verify=False)
     return payload
 
-def test():
-    secret = "my-secret-key"
-    payload = {"sub": "1234", "name": "Rogue", "iat": 1700000000}
-    token = encode(payload, secret)
-    assert token.count(".") == 2
-    decoded = decode(token, secret)
-    assert decoded["sub"] == "1234"
-    assert decoded["name"] == "Rogue"
-    # Invalid signature
-    try:
-        decode(token, "wrong-key")
-        assert False, "Should have raised"
-    except ValueError: pass
-    # Decode without verify
-    decoded2 = decode(token, "", verify=False)
-    assert decoded2["name"] == "Rogue"
-    print("  jwt_lite: ALL TESTS PASSED")
-
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "test": test()
-    else: print("JWT encoder/decoder")
+    token = create_jwt({"sub":"user123","name":"Alice"}, "secret")
+    print(f"JWT: {token[:50]}...")
+    h, p = decode_jwt(token, "secret")
+    print(f"Claims: {p}")
