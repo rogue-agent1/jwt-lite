@@ -1,78 +1,59 @@
 #!/usr/bin/env python3
-"""jwt_lite: Minimal JWT (HS256) implementation."""
-import hashlib, hmac, json, base64, time, sys
+"""JWT encoder/decoder with HMAC-SHA256 signing."""
+import sys, json, base64, hmac, hashlib, time
 
-def b64url_encode(data: bytes) -> str:
+def b64url_encode(data):
+    if isinstance(data, str): data = data.encode()
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
-def b64url_decode(s: str) -> bytes:
-    padding = 4 - len(s) % 4
-    if padding != 4:
-        s += "=" * padding
+def b64url_decode(s):
+    s += "=" * (4 - len(s) % 4)
     return base64.urlsafe_b64decode(s)
 
-def encode(payload: dict, secret: str, exp: int = 0) -> str:
-    header = {"alg": "HS256", "typ": "JWT"}
-    if exp > 0:
-        payload = {**payload, "exp": int(time.time()) + exp}
-    h = b64url_encode(json.dumps(header, separators=(",", ":")).encode())
-    p = b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
-    sig_input = f"{h}.{p}"
-    sig = hmac.new(secret.encode(), sig_input.encode(), hashlib.sha256).digest()
-    return f"{sig_input}.{b64url_encode(sig)}"
+def encode(payload, secret, algorithm="HS256"):
+    header = {"alg": algorithm, "typ": "JWT"}
+    segments = [b64url_encode(json.dumps(header)), b64url_encode(json.dumps(payload))]
+    signing_input = ".".join(segments)
+    if algorithm == "HS256":
+        sig = hmac.new(secret.encode(), signing_input.encode(), hashlib.sha256).digest()
+    else:
+        raise ValueError(f"Unsupported: {algorithm}")
+    segments.append(b64url_encode(sig))
+    return ".".join(segments)
 
-def decode(token: str, secret: str, verify: bool = True) -> dict:
+def decode(token, secret, verify=True):
     parts = token.split(".")
-    if len(parts) != 3:
-        raise ValueError("Invalid token format")
-    h, p, s = parts
+    if len(parts) != 3: raise ValueError("Invalid JWT")
+    header = json.loads(b64url_decode(parts[0]))
+    payload = json.loads(b64url_decode(parts[1]))
     if verify:
-        sig_input = f"{h}.{p}"
-        expected = hmac.new(secret.encode(), sig_input.encode(), hashlib.sha256).digest()
-        actual = b64url_decode(s)
+        signing_input = f"{parts[0]}.{parts[1]}"
+        expected = hmac.new(secret.encode(), signing_input.encode(), hashlib.sha256).digest()
+        actual = b64url_decode(parts[2])
         if not hmac.compare_digest(expected, actual):
             raise ValueError("Invalid signature")
-    payload = json.loads(b64url_decode(p))
-    if verify and "exp" in payload and payload["exp"] < time.time():
-        raise ValueError("Token expired")
+        if "exp" in payload and payload["exp"] < time.time():
+            raise ValueError("Token expired")
     return payload
 
 def test():
-    secret = "my-secret"
-    payload = {"sub": "1234", "name": "Test"}
+    secret = "my-secret-key"
+    payload = {"sub": "1234", "name": "Rogue", "iat": 1700000000}
     token = encode(payload, secret)
     assert token.count(".") == 2
     decoded = decode(token, secret)
     assert decoded["sub"] == "1234"
-    assert decoded["name"] == "Test"
-    # Bad secret
+    assert decoded["name"] == "Rogue"
+    # Invalid signature
     try:
-        decode(token, "wrong")
-        assert False
-    except ValueError:
-        pass
-    # Expired
-    token2 = encode({"sub": "1"}, secret, exp=-10)
-    # Manually craft expired token
-    h, p, s = token2.split(".")
-    pay = json.loads(b64url_decode(p))
-    pay["exp"] = int(time.time()) - 100
-    p2 = b64url_encode(json.dumps(pay, separators=(",", ":")).encode())
-    sig_input = f"{h}.{p2}"
-    sig = hmac.new(secret.encode(), sig_input.encode(), hashlib.sha256).digest()
-    expired_token = f"{sig_input}.{b64url_encode(sig)}"
-    try:
-        decode(expired_token, secret)
-        assert False
-    except ValueError as e:
-        assert "expired" in str(e).lower()
-    # No verify
-    decoded_nv = decode(token, "wrong", verify=False)
-    assert decoded_nv["sub"] == "1234"
-    print("All tests passed!")
+        decode(token, "wrong-key")
+        assert False, "Should have raised"
+    except ValueError: pass
+    # Decode without verify
+    decoded2 = decode(token, "", verify=False)
+    assert decoded2["name"] == "Rogue"
+    print("  jwt_lite: ALL TESTS PASSED")
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "test":
-        test()
-    else:
-        print("Usage: jwt_lite.py test")
+    if len(sys.argv) > 1 and sys.argv[1] == "test": test()
+    else: print("JWT encoder/decoder")

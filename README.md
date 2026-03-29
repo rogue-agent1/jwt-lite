@@ -1,11 +1,10 @@
-# jwt_lite
+# jwt-lite
 
-jwt_lite: Minimal JWT (HS256) implementation.
-
-Single-file, zero-dependency Python CLI.
+Single-file Python CLI. Zero dependencies.
 
 ## Usage
 
 ```bash
+python3 jwt_lite.py
 python3 jwt_lite.py test
 ```
